@@ -1,7 +1,7 @@
 """
 Graph Agent — LLM-powered Highcharts chart generation.
 
-Analyzes tabular data from the traversal agent and produces
+Analyzes raw tool call outputs from the traversal agent and produces
 insightful Highcharts configuration objects.
 """
 from __future__ import annotations
@@ -13,7 +13,6 @@ from typing import Any
 
 from services.llm_provider import LLMProvider
 from prompts.graph_agent_prompt import GRAPH_AGENT_SYSTEM, GRAPH_AGENT_USER
-from utils.data_extractor import format_datasets_for_llm
 
 logger = logging.getLogger(__name__)
 
@@ -87,17 +86,45 @@ def _validate_chart_structure(parsed: dict) -> list[str]:
     return issues
 
 
+def _format_tool_call_outputs(tool_calls: list[dict]) -> str:
+    """Format raw run_sql_python tool call outputs for the LLM.
+
+    Passes each run_sql_python output as-is — the LLM understands JSON
+    natively and can extract chartable data from any structure.
+    """
+    sections = []
+    sql_idx = 0
+
+    for tc in tool_calls:
+        if tc.get("tool_name") != "run_sql_python":
+            continue
+
+        sql_idx += 1
+        output = tc.get("tool_output", "")
+
+        # Truncate very large outputs to avoid token overflow (keep first 8000 chars)
+        if len(output) > 8000:
+            output = output[:8000] + "\n... (truncated)"
+
+        sections.append(f"## SQL Result {sql_idx}\n{output}")
+
+    if not sections:
+        return "No SQL execution results available."
+
+    return "\n\n---\n\n".join(sections)
+
+
 def generate_charts(
     user_query: str,
-    datasets: list[dict],
+    tool_calls: list[dict],
     traversal_findings: str,
     max_charts: int = 3,
 ) -> dict[str, Any]:
     """
-    Generate Highcharts configurations from traversal data.
+    Generate Highcharts configurations from raw traversal tool call outputs.
 
-    Uses GPT-4o to analyze datasets and produce insightful chart configs.
-    Includes JSON validation with retry on failure.
+    Passes run_sql_python outputs directly to GPT-4o — the LLM extracts
+    chartable data from any JSON structure without brittle parsing.
 
     Returns:
         {"charts": [...], "rationale": "..."}
@@ -109,19 +136,21 @@ def generate_charts(
     print(f"  CHART AGENT — Generating Highcharts Visualizations", flush=True)
     print(f"{'=' * 70}{_RESET}\n", flush=True)
 
-    print(f"  {_DIM}Datasets: {len(datasets)}, max charts: {max_charts}{_RESET}", flush=True)
+    # Count run_sql_python calls
+    sql_calls = [tc for tc in tool_calls if tc.get("tool_name") == "run_sql_python"]
+    print(f"  {_DIM}SQL tool calls: {len(sql_calls)}, max charts: {max_charts}{_RESET}", flush=True)
     print(f"  {_DIM}Findings: {len(traversal_findings)} chars{_RESET}\n", flush=True)
 
     provider = LLMProvider(model="gpt-4o", temperature=0.1)
 
-    formatted_data = format_datasets_for_llm(datasets, max_rows_per_dataset=30)
-    print(f"  {_DIM}Formatted data for LLM: {len(formatted_data)} chars{_RESET}", flush=True)
+    tool_call_outputs = _format_tool_call_outputs(tool_calls)
+    print(f"  {_DIM}Formatted tool outputs for LLM: {len(tool_call_outputs)} chars{_RESET}", flush=True)
 
     system_prompt = GRAPH_AGENT_SYSTEM.format(max_charts=max_charts)
     user_message = GRAPH_AGENT_USER.format(
         user_query=user_query,
         traversal_findings=traversal_findings,
-        formatted_datasets=formatted_data,
+        tool_call_outputs=tool_call_outputs,
         max_charts=max_charts,
     )
 

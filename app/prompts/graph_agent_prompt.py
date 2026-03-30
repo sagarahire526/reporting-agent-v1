@@ -108,8 +108,12 @@ GRAPH_AGENT_USER = """# User Question
 # Traversal Agent Findings
 {traversal_findings}
 
-# Available Data
-{formatted_datasets}
+# Raw SQL Execution Results
+Below are the raw outputs from run_sql_python tool calls made by the traversal agent.
+Each output is a JSON object with "status" and "result" keys.
+Extract the actual data (numbers, categories, breakdowns) from these results to build your charts.
+
+{tool_call_outputs}
 
 # Instructions
 Analyze the data above and generate Highcharts visualizations that best answer the user's question.

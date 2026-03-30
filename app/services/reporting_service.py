@@ -4,8 +4,7 @@ Reporting Service — Orchestrates the full reporting pipeline.
 Pipeline:
     1. Schema Discovery → neo4j_tool.get_schema()
     2. Traversal Agent  → traversal_node(state) → raw data + findings
-    3. Data Extraction  → extract_chart_data(tool_calls) → tabular datasets
-    4. Chart Generation → generate_charts(...) → Highcharts JSON configs
+    3. Chart Generation → generate_charts(LLM gets raw tool outputs directly)
 """
 from __future__ import annotations
 
@@ -16,7 +15,6 @@ from typing import Any
 from tools.neo4j_tool import neo4j_tool
 from agents.traversal import traversal_node
 from agents.graph_agent import generate_charts
-from utils.data_extractor import extract_chart_data
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +55,7 @@ def run_report(
     pipeline_start = time.perf_counter()
 
     # ── Step 1: Schema Discovery ──────────────────────────────────────────
-    print(f"\n  {_BOLD}{_CYAN}Step 1/4:{_RESET} Discovering KG schema...", flush=True)
+    print(f"\n  {_BOLD}{_CYAN}Step 1/3:{_RESET} Discovering KG schema...", flush=True)
     t0 = time.perf_counter()
     try:
         kg_schema = neo4j_tool.get_schema()
@@ -77,7 +75,7 @@ def run_report(
     print(f"  {_GREEN}OK Schema:{_RESET} {schema_lines} lines in {schema_ms:.0f}ms", flush=True)
 
     # ── Step 2: Traversal Agent ───────────────────────────────────────────
-    print(f"\n  {_BOLD}{_CYAN}Step 2/4:{_RESET} Running traversal agent...", flush=True)
+    print(f"\n  {_BOLD}{_CYAN}Step 2/3:{_RESET} Running traversal agent...", flush=True)
     t0 = time.perf_counter()
     state = {
         "user_query": query,
@@ -109,35 +107,13 @@ def run_report(
             "errors": errors or [traversal_findings],
         }
 
-    # ── Step 3: Data Extraction ───────────────────────────────────────────
-    print(f"\n  {_BOLD}{_CYAN}Step 3/4:{_RESET} Extracting chart data...", flush=True)
-    datasets = extract_chart_data(tool_calls)
-
-    if not datasets:
-        print(f"  {_RED}X No chartable datasets extracted{_RESET}\n", flush=True)
-        return {
-            "status": "error",
-            "charts": [],
-            "rationale": "No chartable data was retrieved by the traversal agent.",
-            "traversal_steps": traversal_steps,
-            "traversal_findings": traversal_findings,
-            "errors": ["No chartable data found in traversal results. "
-                       "The traversal agent may not have executed any SQL queries successfully."],
-        }
-
-    for i, ds in enumerate(datasets, 1):
-        row_count = ds.get("total_rows", len(ds.get("detail_rows", [])))
-        has_summary = bool(ds.get("summary"))
-        print(f"    {_DIM}Dataset {i}: {row_count} rows, summary={'yes' if has_summary else 'no'}{_RESET}", flush=True)
-    print(f"  {_GREEN}OK Extraction:{_RESET} {len(datasets)} dataset(s)", flush=True)
-
-    # ── Step 4: Chart Generation ──────────────────────────────────────────
-    print(f"\n  {_BOLD}{_CYAN}Step 4/4:{_RESET} Generating Highcharts (max {max_charts})...", flush=True)
+    # ── Step 3: Chart Generation (LLM gets raw tool outputs) ─────────────
+    print(f"\n  {_BOLD}{_CYAN}Step 3/3:{_RESET} Generating Highcharts (max {max_charts})...", flush=True)
     t0 = time.perf_counter()
     try:
         chart_result = generate_charts(
             user_query=query,
-            datasets=datasets,
+            tool_calls=tool_calls,
             traversal_findings=traversal_findings,
             max_charts=max_charts,
         )
