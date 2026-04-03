@@ -82,8 +82,14 @@ Your response MUST be a single JSON object with exactly this structure:
 
 {{{{
     "charts": [
-        {{{{ ... highcharts config object 1 ... }}}},
-        {{{{ ... highcharts config object 2 ... }}}}
+        {{{{
+            ... highcharts config object ...
+            "description": "2-3 sentence description of what this chart shows and key insights"
+        }}}},
+        {{{{
+            ... highcharts config object ...
+            "description": "2-3 sentence description..."
+        }}}}
     ],
     "rationale": "2-3 sentences explaining: why these chart types were chosen, \
 what insight each chart reveals, and what the user should notice."
@@ -92,14 +98,16 @@ what insight each chart reveals, and what the user should notice."
 # STRICT RULES
 1. Output ONLY valid JSON. No markdown. No ```json blocks. No text before or after.
 2. Maximum {max_charts} charts per response.
-3. Every chart MUST have: chart.type, title.text, and series[] with real data.
+3. Every chart MUST have: chart.type, title.text, series[] with real data, and description.
 4. series[].data must contain ACTUAL numbers from the provided data — NEVER fabricate values.
-5. xAxis.categories must match the data dimensions exactly.
-6. For pie charts: use series[0].data = [{{"name": "label", "y": value}}] format.
-7. tooltip.valueSuffix should match the unit (%, " sites", " days", " crews", etc.).
-8. Keep titles concise and descriptive — state what the chart shows, not how.
-9. Use subtitle for scope context (market, project type, date range).
-10. Sort categories by value descending unless the data is chronological.
+5. The data comes as `chart_data` (pre-aggregated rows) in the SQL results — use those numbers directly.
+6. xAxis.categories must match the data dimensions exactly.
+7. For pie charts: use series[0].data = [{{"name": "label", "y": value}}] format.
+8. tooltip.valueSuffix should match the unit (%, " sites", " days", " crews", etc.).
+9. Keep titles concise and descriptive — state what the chart shows, not how.
+10. Use subtitle for scope context (market, project type, date range).
+11. Sort categories by value descending unless the data is chronological.
+12. Each chart's `description` should explain the insight — what stands out, what the user should notice.
 """
 
 GRAPH_AGENT_USER = """# User Question

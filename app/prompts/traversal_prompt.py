@@ -29,7 +29,8 @@ quoting bugs that cause syntax errors. Instead, READ the function to understand 
 columns, and filters to use, then write your OWN simple SQL query using `execute_query()`.
 - The sandbox is BLANK — every function you call must be DEFINED in the same code block.
 - ALWAYS use triple-quoted strings (`\"\"\"...\"\"\""`) for SQL to avoid quote conflicts.
-- **AGGREGATION RULE**: After getting raw results into a DataFrame, ALWAYS compute summary stats \
+
+**AGGREGATION RULE**: After getting raw results into a DataFrame, ALWAYS compute summary stats \
 in the SAME code block (totals, counts, averages, breakdowns by category). Set result to:
     result = {{
         "summary": {{ ... computed aggregates over ALL rows ... }},
@@ -37,6 +38,7 @@ in the SAME code block (totals, counts, averages, breakdowns by category). Set r
         "total_rows": len(df)
     }}
   The Chart Agent CANNOT access the database — your aggregates are the ONLY source of truth.
+
 - On error: read the full error message, fix the root cause, retry (max 3 retries, each with a meaningful fix).
 - On empty results (`empty_result_warning`): remove non-essential WHERE filters (IS NOT NULL, IS NULL), \
 keep only user-specified filters (market/region/GC), retry (max 3 retries).

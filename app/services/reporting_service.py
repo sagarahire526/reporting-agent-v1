@@ -1,5 +1,5 @@
 """
-Reporting Service — Orchestrates the full reporting pipeline.
+Reporting Service — Orchestrates the full reporting pipeline via SSE streaming.
 
 Pipeline:
     1. Schema Discovery → neo4j_tool.get_schema()
@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import time
 import logging
-from typing import Any
+from typing import Any, Callable
 
 from tools.neo4j_tool import neo4j_tool
 from agents.traversal import traversal_node
@@ -28,31 +28,27 @@ _BOLD = "\033[1m"
 _RESET = "\033[0m"
 
 
-def run_report(
+def stream_report(
     query: str,
     project_type: str,
+    query_id: str,
+    emit: Callable[[str, dict], None],
     max_charts: int = 3,
 ) -> dict[str, Any]:
     """
-    Execute the full reporting pipeline.
+    Execute the reporting pipeline with SSE events emitted at each step.
 
     Args:
         query: Natural language user query
         project_type: "NTM" | "AHLOB Modernization" | "Both"
-        max_charts: Maximum number of charts to generate (default 3)
-
-    Returns:
-        {
-            "status": "success" | "error",
-            "charts": [...],
-            "rationale": "...",
-            "traversal_steps": int,
-            "traversal_findings": str,
-            "errors": [...]
-        }
+        query_id: Unique ID for this report request
+        emit: Callback to send SSE events — emit(event_name, data_dict)
+        max_charts: Maximum number of charts to generate
     """
     errors = []
     pipeline_start = time.perf_counter()
+
+    emit("step", {"step": 1, "total": 3, "label": "Discovering Knowledge Graph schema..."})
 
     # ── Step 1: Schema Discovery ──────────────────────────────────────────
     print(f"\n  {_BOLD}{_CYAN}Step 1/3:{_RESET} Discovering KG schema...", flush=True)
@@ -62,19 +58,14 @@ def run_report(
     except Exception as e:
         logger.error("Schema discovery failed: %s", e)
         print(f"  {_RED}X Schema discovery failed: {e}{_RESET}\n", flush=True)
-        return {
-            "status": "error",
-            "charts": [],
-            "rationale": "",
-            "traversal_steps": 0,
-            "traversal_findings": "",
-            "errors": [f"Schema discovery failed: {e}"],
-        }
+        emit("error", {"message": f"Schema discovery failed: {e}"})
+        return {"status": "error", "charts": [], "rationale": "", "traversal_steps": 0,
+                "traversal_findings": "", "errors": [f"Schema discovery failed: {e}"]}
     schema_ms = (time.perf_counter() - t0) * 1000
-    schema_lines = kg_schema.count("\n") + 1
-    print(f"  {_GREEN}OK Schema:{_RESET} {schema_lines} lines in {schema_ms:.0f}ms", flush=True)
+    print(f"  {_GREEN}OK Schema:{_RESET} {kg_schema.count(chr(10)) + 1} lines in {schema_ms:.0f}ms", flush=True)
 
     # ── Step 2: Traversal Agent ───────────────────────────────────────────
+    emit("step", {"step": 2, "total": 3, "label": "Running traversal agent — querying databases..."})
     print(f"\n  {_BOLD}{_CYAN}Step 2/3:{_RESET} Running traversal agent...", flush=True)
     t0 = time.perf_counter()
     state = {
@@ -95,19 +86,16 @@ def run_report(
         errors.extend(traversal_result["errors"])
 
     print(f"  {_GREEN}OK Traversal:{_RESET} {traversal_steps} tool call(s) in {traversal_ms:.0f}ms", flush=True)
+    emit("traversal_done", {"steps": traversal_steps, "elapsed_ms": round(traversal_ms)})
 
     if traversal_findings.startswith("Traversal failed"):
         print(f"  {_RED}X Traversal failed — aborting pipeline{_RESET}\n", flush=True)
-        return {
-            "status": "error",
-            "charts": [],
-            "rationale": "",
-            "traversal_steps": traversal_steps,
-            "traversal_findings": traversal_findings,
-            "errors": errors or [traversal_findings],
-        }
+        emit("error", {"message": traversal_findings})
+        return {"status": "error", "charts": [], "rationale": "", "traversal_steps": traversal_steps,
+                "traversal_findings": traversal_findings, "errors": errors or [traversal_findings]}
 
-    # ── Step 3: Chart Generation (LLM gets raw tool outputs) ─────────────
+    # ── Step 3: Chart Generation ──────────────────────────────────────────
+    emit("step", {"step": 3, "total": 3, "label": "Generating Highcharts visualizations..."})
     print(f"\n  {_BOLD}{_CYAN}Step 3/3:{_RESET} Generating Highcharts (max {max_charts})...", flush=True)
     t0 = time.perf_counter()
     try:
@@ -119,12 +107,12 @@ def run_report(
         )
         chart_ms = (time.perf_counter() - t0) * 1000
         charts = chart_result.get("charts", [])
-
         total_ms = (time.perf_counter() - pipeline_start) * 1000
+
         print(f"  {_GREEN}OK Charts:{_RESET} {len(charts)} chart(s) in {chart_ms:.0f}ms", flush=True)
         print(f"\n  {_BOLD}Pipeline complete — {total_ms:.0f}ms total{_RESET}\n", flush=True)
 
-        return {
+        result = {
             "status": "success",
             "charts": charts,
             "rationale": chart_result.get("rationale", ""),
@@ -132,31 +120,14 @@ def run_report(
             "traversal_findings": traversal_findings,
             "errors": errors,
         }
+        emit("complete", result)
+        return result
 
-    except ValueError as e:
+    except (ValueError, Exception) as e:
         chart_ms = (time.perf_counter() - t0) * 1000
         logger.error("Chart generation failed: %s", e)
         print(f"  {_RED}X Chart generation failed after {chart_ms:.0f}ms: {e}{_RESET}\n", flush=True)
         errors.append(f"Chart generation failed: {e}")
-        return {
-            "status": "error",
-            "charts": [],
-            "rationale": "",
-            "traversal_steps": traversal_steps,
-            "traversal_findings": traversal_findings,
-            "errors": errors,
-        }
-
-    except Exception as e:
-        chart_ms = (time.perf_counter() - t0) * 1000
-        logger.error("Unexpected error in chart generation: %s", e)
-        print(f"  {_RED}X Unexpected error after {chart_ms:.0f}ms: {e}{_RESET}\n", flush=True)
-        errors.append(f"Unexpected error: {e}")
-        return {
-            "status": "error",
-            "charts": [],
-            "rationale": "",
-            "traversal_steps": traversal_steps,
-            "traversal_findings": traversal_findings,
-            "errors": errors,
-        }
+        emit("error", {"message": str(e)})
+        return {"status": "error", "charts": [], "rationale": "", "traversal_steps": traversal_steps,
+                "traversal_findings": traversal_findings, "errors": errors}

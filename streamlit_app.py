@@ -163,37 +163,75 @@ with col1:
 # ── Report Generation ────────────────────────────────────────────────────────
 
 if generate_btn and query.strip():
-    with st.spinner("Generating report... (this may take 30-60 seconds)"):
-        try:
-            payload = {
-                "query": query.strip(),
-                "project_type": project_type,
-                "user_id": user_id,
-                "username": username,
-                "max_charts": max_charts,
-            }
+    import urllib.parse
 
-            resp = requests.post(
-                f"{API_BASE}/report",
-                json=payload,
-                timeout=300,
-            )
+    progress_bar = st.progress(0, text="Starting report generation...")
+    status_text = st.empty()
 
-            if resp.status_code != 200:
-                st.error(f"API error ({resp.status_code}): {resp.text}")
-            else:
-                result = resp.json()
-                st.session_state["last_result"] = result
+    try:
+        params = urllib.parse.urlencode({
+            "query": query.strip(),
+            "project_type": project_type,
+            "user_id": user_id,
+            "username": username,
+            "max_charts": max_charts,
+        })
+        sse_url = f"{API_BASE}/report/stream?{params}"
 
-        except requests.exceptions.ConnectionError:
-            st.error(
-                "Could not connect to the Reporting Agent API. "
-                "Make sure the server is running: `uvicorn app.main:app --port 8001`"
-            )
-        except requests.exceptions.Timeout:
-            st.error("Request timed out. The query may be too complex.")
-        except Exception as e:
-            st.error(f"Error: {e}")
+        resp = requests.get(sse_url, stream=True, timeout=300)
+
+        if resp.status_code != 200:
+            st.error(f"API error ({resp.status_code}): {resp.text}")
+        else:
+            result = None
+            for line in resp.iter_lines(decode_unicode=True):
+                if not line:
+                    continue
+                if line.startswith(":"):  # heartbeat
+                    continue
+                if line.startswith("event: "):
+                    current_event = line[7:]
+                    continue
+                if line.startswith("data: "):
+                    data = json.loads(line[6:])
+
+                    if current_event == "stream_started":
+                        status_text.info(f"Report started (ID: {data.get('query_id', '?')[:8]}...)")
+
+                    elif current_event == "step":
+                        step = data.get("step", 0)
+                        total = data.get("total", 3)
+                        label = data.get("label", "Processing...")
+                        progress_bar.progress(step / (total + 1), text=label)
+
+                    elif current_event == "traversal_done":
+                        steps = data.get("steps", 0)
+                        ms = data.get("elapsed_ms", 0)
+                        status_text.success(f"Traversal complete: {steps} tool call(s) in {ms/1000:.1f}s")
+
+                    elif current_event == "complete":
+                        progress_bar.progress(1.0, text="Report complete!")
+                        status_text.empty()
+                        result = data
+                        st.session_state["last_result"] = result
+
+                    elif current_event == "error":
+                        progress_bar.empty()
+                        status_text.error(f"Error: {data.get('message', 'Unknown error')}")
+
+            if result is None and "last_result" not in st.session_state:
+                progress_bar.empty()
+                status_text.warning("Stream ended without a result.")
+
+    except requests.exceptions.ConnectionError:
+        progress_bar.empty()
+        st.error(
+            "Could not connect to the Reporting Agent API. "
+            "Make sure the server is running: `uvicorn app.main:app --port 8001`"
+        )
+    except Exception as e:
+        progress_bar.empty()
+        st.error(f"Error: {e}")
 
 elif generate_btn:
     st.warning("Please enter a query.")
@@ -228,7 +266,7 @@ if "last_result" in st.session_state:
             if rationale:
                 st.info(f"**Insight:** {rationale}")
 
-            # Render each chart
+            # Render each chart with description
             for i, chart_config in enumerate(charts):
                 title = "Chart"
                 if isinstance(chart_config.get("title"), dict):
@@ -236,7 +274,13 @@ if "last_result" in st.session_state:
                 elif isinstance(chart_config.get("title"), str):
                     title = chart_config["title"]
 
-                st.subheader(title)
+                st.subheader(f"{i+1}. {title}")
+
+                # Chart description
+                description = chart_config.get("description", "")
+                if description:
+                    st.caption(description)
+
                 render_highchart(chart_config, chart_index=i)
 
             # Raw JSON expandable
