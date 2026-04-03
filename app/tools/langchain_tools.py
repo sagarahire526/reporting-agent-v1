@@ -106,6 +106,17 @@ def get_node(node_id: str) -> str:
     Returns all properties plus incoming and outgoing relationships.
     Supports aliases like 'GC' for general_contractor, 'NAS' for nas_session, etc."""
     result = _get_bkg().query({"mode": "get_node", "node_id": node_id})
+
+    # Process map_python_function: extract GROUP BY dimensions and replace
+    # with a placeholder so the traversal agent picks only relevant ones
+    if isinstance(result, dict):
+        func_str = result.get("map_python_function")
+        if func_str and isinstance(func_str, str):
+            extracted = _extract_group_by_dimensions(func_str)
+            if extracted:
+                result["map_python_function"] = extracted["modified_function"]
+                result["available_group_by_dimensions"] = extracted["available_dimensions"]
+
     return _truncate_tool_output("get_node", json.dumps(result, default=str))
 
 
@@ -128,12 +139,63 @@ def traverse_graph(start: str, depth: int = 2, rel_type: Optional[str] = None) -
     return _truncate_tool_output("traverse_graph", json.dumps(result, default=str))
 
 
+# ─────────────────────────────────────────────
+# GROUP BY dimension extraction
+# ─────────────────────────────────────────────
+
+def _extract_group_by_dimensions(python_function: str) -> dict | None:
+    """
+    Parse a kpi_python_function / map_python_function string to:
+    1. Extract the GROUP BY column list
+    2. Replace the GROUP BY line with a placeholder comment
+
+    This lets the traversal agent choose only the dimensions
+    relevant to the user's query instead of using all hardcoded ones.
+    """
+    if not python_function or not isinstance(python_function, str):
+        return None
+
+    pattern = r'(GROUP\s+BY\s+)([\w\s,\.]+?)(\s*(?:\n|"""|\'\'\'|\)|$))'
+    match = re.search(pattern, python_function, re.IGNORECASE)
+    if not match:
+        return None
+
+    raw_columns = match.group(2)
+    dimensions = [col.strip() for col in raw_columns.split(",") if col.strip()]
+    if not dimensions:
+        return None
+
+    placeholder = "-- GROUP BY: <SELECT from available_dimensions based on your sub-query granularity>"
+    modified_function = (
+        python_function[:match.start()]
+        + placeholder
+        + python_function[match.end():]
+    )
+
+    return {
+        "available_dimensions": dimensions,
+        "modified_function": modified_function,
+    }
+
+
 @tool
 def get_kpi(node_id: str) -> str:
     """Get detailed information about a KPI node including its definition,
     formula description, business logic, Python function, source tables/columns,
     dimensions, filters, output schema, and related core nodes."""
     result = _get_bkg().query({"mode": "get_kpi", "node_id": node_id})
+
+    # Process kpi_python_function: extract GROUP BY dimensions and replace
+    # with a placeholder so the traversal agent picks only relevant ones
+    if isinstance(result, dict):
+        for key in ("kpi_python_function", "map_python_function"):
+            func_str = result.get(key)
+            if func_str and isinstance(func_str, str):
+                extracted = _extract_group_by_dimensions(func_str)
+                if extracted:
+                    result[key] = extracted["modified_function"]
+                    result["available_group_by_dimensions"] = extracted["available_dimensions"]
+
     return _truncate_tool_output("get_kpi", json.dumps(result, default=str))
 
 

@@ -30,6 +30,22 @@ columns, and filters to use, then write your OWN simple SQL query using `execute
 - The sandbox is BLANK — every function you call must be DEFINED in the same code block.
 - ALWAYS use triple-quoted strings (`\"\"\"...\"\"\""`) for SQL to avoid quote conflicts.
 
+**GROUP BY DIMENSION RULE (CRITICAL):**
+The `get_kpi`, `get_node` output includes `available_group_by_dimensions` — the list of ALL possible \
+grouping columns (e.g., `["rgn_region", "m_area", "m_market", "pj_general_contractor"]`). \
+The python function's GROUP BY has been replaced with a placeholder comment.
+
+You MUST choose only the dimensions that match the user's query granularity:
+- User asks about "by region" → `GROUP BY rgn_region` only
+- User asks about "by market" → `GROUP BY m_market` only
+- User asks about "by GC in Houston" → `GROUP BY pj_general_contractor` with `WHERE m_market = 'HOUSTON'`
+- User asks about "by market and status" → `GROUP BY m_market, pj_project_status`
+- User asks for a single total number → NO GROUP BY at all, just aggregate
+
+**NEVER use all available dimensions in GROUP BY.** That creates unnecessarily granular \
+results (e.g., one row per region+area+market+GC combo) which are useless for charting. \
+Only include the dimension(s) the user explicitly asked about.
+
 **AGGREGATION RULE**: After getting raw results into a DataFrame, ALWAYS compute summary stats \
 in the SAME code block (totals, counts, averages, breakdowns by category). Set result to:
     result = {{
